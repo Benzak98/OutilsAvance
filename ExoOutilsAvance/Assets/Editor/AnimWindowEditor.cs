@@ -5,9 +5,15 @@ using System.Collections.Generic;
 public class AnimWindowEditor : EditorWindow
 {
     bool groupEnabled;
-    double globalTimer = 0f;
+    bool animationClipWithSlider = false;
+    float _lastEditorTime = 0f;
+    List<float> _listSpeedAnimation = new List<float>();
+    List<float> _samplerAnimation = new List<float>();
     List<Animator> animatorList = new List<Animator>();
-    List<bool> boolList = new List<bool>();
+    List<bool> animatorBoolList = new List<bool>();
+    Dictionary<AnimationClip, bool> clipDico = new Dictionary<AnimationClip, bool>();
+    AnimationClip currentClip = null;
+
 
     // Add menu named "My Window" to the Window menu
     [MenuItem("Window/CustomEditor")]
@@ -16,59 +22,85 @@ public class AnimWindowEditor : EditorWindow
         // Get existing open window or if none, make a new one:
         AnimWindowEditor window = (AnimWindowEditor)EditorWindow.GetWindow(typeof(AnimWindowEditor));
         window.Show();
-        AnimationMode.StartAnimationMode();
     }
 
     private void OnEnable()
     {
-        EditorApplication.update += AnimationUpdate;
+        EditorApplication.playModeStateChanged += _OnPlayModeStateChange;
     }
     private void OnDisable()
     {
-        EditorApplication.update -= AnimationUpdate;
+        EditorApplication.playModeStateChanged -= _OnPlayModeStateChange;
+        StopAnimSimulation();
+    }
+
+    private void _OnPlayModeStateChange(PlayModeStateChange state)
+    {
+        if (state == PlayModeStateChange.ExitingEditMode)
+            StopAnimSimulation();
     }
 
     void OnGUI()
     {
+        //GUI.backgroundColor = Color.white;
         GUILayout.Label("Base Settings", EditorStyles.boldLabel);
         
         if (GUILayout.Button("GenerateList"))
             GenerateList();
 
-        groupEnabled = EditorGUILayout.BeginToggleGroup("AnimatorList", groupEnabled);
-        
         for (int i = 0; i < animatorList.Count; i++)
         {
             AnimationClip[] animationClips = animatorList[i].runtimeAnimatorController.animationClips;
+            
+            foreach (AnimationClip clip in animationClips)
+            {
+                if(!clipDico.ContainsKey(clip))
+                    clipDico.Add(clip, false);
+            }
+
             if (GUILayout.Button(animatorList[i].name))
             {
                 SelectGameObject(animatorList[i]);
-                boolList[i] = !boolList[i];
+                animatorBoolList[i] = !animatorBoolList[i];
             }
-            if (boolList[i])
+            if (animatorBoolList[i])
             {
                 EditorGUILayout.BeginHorizontal();
-                foreach (AnimationClip clip in animationClips)
+                for (int j = 0; j < animationClips.Length; j++)
                 {
-                    if (GUILayout.Button(clip.name))
-                        PlayAndStopAnim();
+                    if (GUILayout.Button(animationClips[j].name))
+                    {
+                        if (!clipDico[animationClips[j]])
+                        {
+                            StartAnimSimulation(animationClips[j]);
+                            currentClip = animationClips[j];
+                        }
+                    }
                 }
                 EditorGUILayout.EndHorizontal();
+                _listSpeedAnimation[i] = EditorGUILayout.Slider(_listSpeedAnimation[i], 0f, 10f);
+                if (currentClip != null)
+                    _samplerAnimation[i] = EditorGUILayout.Slider(_samplerAnimation[i], 0f, currentClip.length);
+
+                animationClipWithSlider = EditorGUILayout.BeginToggleGroup("ActiveSlider", animationClipWithSlider);
+                EditorGUILayout.EndToggleGroup();
+
             }
         }
-        EditorGUILayout.EndToggleGroup();
     }
 
     void GenerateList()
     {
-        AnimationMode.StopAnimationMode();
+        AnimationMode.StartAnimationMode();
         animatorList.Clear();
-        boolList.Clear();
+        animatorBoolList.Clear();
         Animator[] allAnimators = FindObjectsOfType<Animator>();
         foreach (Animator animator in allAnimators)
         {
             animatorList.Add(animator);
-            boolList.Add(false);
+            animatorBoolList.Add(false);
+            _listSpeedAnimation.Add(0f);
+            _samplerAnimation.Add(0f);
         }
     }
 
@@ -77,15 +109,64 @@ public class AnimWindowEditor : EditorWindow
         Selection.activeGameObject = animator.gameObject;
     }
 
-    void PlayAndStopAnim()
+    void OnEditorUpdate()
     {
-        
+        for (int i = 0; i < animatorList.Count; i++)
+        {
+            if (animatorList[i] == null)
+                return;
+
+            foreach (AnimationClip clip in animatorList[i].runtimeAnimatorController.animationClips)
+            {
+                if (clipDico[clip])
+                {
+                    if (!animationClipWithSlider)
+                    {
+                        float animTime = (Time.realtimeSinceStartup - _lastEditorTime) * _listSpeedAnimation[i];
+                        if (animTime >= clip.length)
+                            StopAnimSimulation(clip);
+                        else
+                        {
+                            if (AnimationMode.InAnimationMode())
+                                AnimationMode.SampleAnimationClip(animatorList[i].gameObject, clip, animTime);
+                        }
+                    }
+                    else
+                    {
+                        float animTime = _samplerAnimation[i];
+                        if (animTime >= clip.length)
+                            StopAnimSimulation(clip);
+                        else
+                        {
+                            if (AnimationMode.InAnimationMode())
+                                AnimationMode.SampleAnimationClip(animatorList[i].gameObject, clip, animTime);
+                        }
+                    }
+                   
+                }
+            }
+        }
     }
 
-    void AnimationUpdate()
+    public void StartAnimSimulation(AnimationClip clip)
     {
-        globalTimer += EditorApplication.timeSinceStartup;
-        
+        AnimationMode.StartAnimationMode();
+        EditorApplication.update -= OnEditorUpdate;
+        EditorApplication.update += OnEditorUpdate;
+        _lastEditorTime = Time.realtimeSinceStartup;
+        clipDico[clip] = true;
     }
 
+    public void StopAnimSimulation(AnimationClip clip)
+    {
+        AnimationMode.StopAnimationMode();
+        EditorApplication.update -= OnEditorUpdate;
+        clipDico[clip] = false;
+    }
+
+    public void StopAnimSimulation()
+    {
+        AnimationMode.StopAnimationMode();
+        EditorApplication.update -= OnEditorUpdate;
+    }
 }
